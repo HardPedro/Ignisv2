@@ -1,6 +1,58 @@
 import React, { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, Save, Terminal, Key, Shield, Users, Plus, X, Trash2 } from 'lucide-react';
+import { Settings as SettingsIcon, Save, Terminal, Key, Shield, Users, Plus, X, Trash2, RefreshCw } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+
+const WebhookLogs = () => {
+  const [logs, setLogs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const fetchLogs = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/webhook-logs');
+      const data = await res.json();
+      setLogs(data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLogs();
+  }, []);
+
+  return (
+    <div className="mt-8 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-lg font-semibold text-gray-800">Logs do Webhook (Últimos 20)</h3>
+        <button 
+          onClick={fetchLogs}
+          className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm transition-colors"
+        >
+          <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+          Atualizar
+        </button>
+      </div>
+      
+      {logs.length === 0 ? (
+        <p className="text-gray-500 text-sm">Nenhum log recebido ainda.</p>
+      ) : (
+        <div className="space-y-4 max-h-96 overflow-y-auto">
+          {logs.map((log, i) => (
+            <div key={i} className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+              <div className="text-xs text-gray-500 mb-2">{new Date(log.time).toLocaleString()}</div>
+              <pre className="text-xs text-gray-800 whitespace-pre-wrap overflow-x-auto">
+                {JSON.stringify(log.body, null, 2)}
+              </pre>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export function Settings() {
   const [isDevAreaOpen, setIsDevAreaOpen] = useState(false);
@@ -367,6 +419,10 @@ export function Settings() {
                     )}
                   </div>
                 </form>
+                
+                <div className="mt-8 border-t border-gray-800 pt-6">
+                  <WebhookLogs />
+                </div>
               </div>
             </div>
           </motion.div>

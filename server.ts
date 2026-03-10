@@ -796,14 +796,32 @@ app.post('/api/360dialog/set-webhook', authenticate, async (req: any, res) => {
   }
 });
 
+const webhookLogs: any[] = [];
+
 // Webhook Event Handler for 360dialog
 app.post('/webhooks/360dialog', (req, res) => {
   const body = req.body;
   
-  if (body.contacts && body.messages) {
-    // 360dialog /v1/ webhook format
-    const message = body.messages[0];
-    const contact = body.contacts[0];
+  console.log('360dialog Webhook received:', JSON.stringify(body, null, 2));
+  webhookLogs.unshift({ time: new Date().toISOString(), body });
+  if (webhookLogs.length > 20) webhookLogs.pop();
+  
+  let messages = body.messages;
+  let contacts = body.contacts;
+  let statuses = body.statuses;
+
+  // Check if it's Cloud API format (often used by 360dialog sandbox or newer setups)
+  if (body.entry && body.entry[0] && body.entry[0].changes && body.entry[0].changes[0] && body.entry[0].changes[0].value) {
+    const value = body.entry[0].changes[0].value;
+    messages = value.messages;
+    contacts = value.contacts;
+    statuses = value.statuses;
+  }
+  
+  if (contacts && messages && messages.length > 0) {
+    // 360dialog /v1/ webhook format or Cloud API format
+    const message = messages[0];
+    const contact = contacts[0];
     
     const wa_id = message.from;
     const msg_body = message.text ? message.text.body : '';
@@ -833,12 +851,30 @@ app.post('/webhooks/360dialog', (req, res) => {
             'wam-' + Date.now() + Math.random(), waNumber.tenant_id, conversation.id, msg_id, 'inbound', message.type, msg_body, 'received', timestamp
           );
         })();
+        console.log('360dialog message saved successfully');
       } catch (err) {
         console.error('Error processing 360dialog webhook:', err);
       }
+    } else {
+      console.warn('No WhatsApp number found in DB to associate with this message');
+    }
+  } else if (statuses && statuses.length > 0) {
+    console.log('360dialog Webhook status update:', statuses);
+    // Handle message status updates (sent, delivered, read, failed)
+    const status = statuses[0];
+    try {
+      db.prepare('UPDATE whatsapp_messages SET status = ? WHERE wa_message_id = ?').run(
+        status.status, status.id
+      );
+    } catch (err) {
+      console.error('Error updating message status:', err);
     }
   }
   res.sendStatus(200);
+});
+
+app.get('/api/webhook-logs', (req, res) => {
+  res.json(webhookLogs);
 });
 
 // Send a message via 360dialog API
