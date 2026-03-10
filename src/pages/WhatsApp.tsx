@@ -155,7 +155,8 @@ export function WhatsApp() {
         if (errorData.details?.error?.message?.includes('expired')) {
           alert('Erro: O token do WhatsApp expirou. Por favor, gere um novo token no painel da Meta e atualize nas Configurações.');
         } else {
-          alert('Falha ao enviar mensagem. Verifique as configurações do WhatsApp.');
+          const errorMsg = errorData.details ? JSON.stringify(errorData.details) : errorData.error || 'Erro desconhecido';
+          alert(`Falha ao enviar mensagem. Detalhes: ${errorMsg}`);
         }
       }
     } catch (err) {

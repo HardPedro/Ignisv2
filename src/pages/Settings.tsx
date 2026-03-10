@@ -54,6 +54,72 @@ const WebhookLogs = () => {
   );
 };
 
+const ApiLogs = () => {
+  const [logs, setLogs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const fetchLogs = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/api-logs');
+      const data = await res.json();
+      setLogs(data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLogs();
+  }, []);
+
+  return (
+    <div className="mt-8 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-lg font-semibold text-gray-800">Logs de Envio de Mensagem (Últimos 20)</h3>
+        <button 
+          onClick={fetchLogs}
+          className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg text-sm transition-colors"
+        >
+          <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+          Atualizar
+        </button>
+      </div>
+      
+      {logs.length === 0 ? (
+        <p className="text-gray-500 text-sm">Nenhum log de envio ainda.</p>
+      ) : (
+        <div className="space-y-4 max-h-96 overflow-y-auto">
+          {logs.map((log, i) => (
+            <div key={i} className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+              <div className="text-xs text-gray-500 mb-2">{new Date(log.time).toLocaleString()}</div>
+              <div className="mb-2">
+                <span className="font-semibold text-xs text-gray-700">Payload:</span>
+                <pre className="text-xs text-gray-800 whitespace-pre-wrap overflow-x-auto mt-1">
+                  {JSON.stringify(log.payload, null, 2)}
+                </pre>
+              </div>
+              <div>
+                <span className="font-semibold text-xs text-gray-700">Tentativas:</span>
+                {log.attempts.map((attempt: any, j: number) => (
+                  <div key={j} className="mt-1 p-2 bg-gray-100 rounded border border-gray-200">
+                    <div className="text-xs font-mono text-gray-600">{attempt.url} - Status: {attempt.status}</div>
+                    <pre className="text-xs text-gray-800 whitespace-pre-wrap overflow-x-auto mt-1">
+                      {attempt.response}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export function Settings() {
   const [isDevAreaOpen, setIsDevAreaOpen] = useState(false);
   const [whatsappApiKey, setWhatsappApiKey] = useState('');
@@ -422,6 +488,10 @@ export function Settings() {
                 
                 <div className="mt-8 border-t border-gray-800 pt-6">
                   <WebhookLogs />
+                </div>
+                
+                <div className="mt-8 border-t border-gray-800 pt-6">
+                  <ApiLogs />
                 </div>
               </div>
             </div>

@@ -797,6 +797,7 @@ app.post('/api/360dialog/set-webhook', authenticate, async (req: any, res) => {
 });
 
 const webhookLogs: any[] = [];
+const apiLogs: any[] = [];
 
 // Webhook Event Handler for 360dialog
 app.post('/webhooks/360dialog', (req, res) => {
@@ -877,6 +878,10 @@ app.get('/api/webhook-logs', (req, res) => {
   res.json(webhookLogs);
 });
 
+app.get('/api/api-logs', (req, res) => {
+  res.json(apiLogs);
+});
+
 // Send a message via 360dialog API
 app.post('/api/360dialog/messages', authenticate, async (req: any, res) => {
   const { conversation_id, content } = req.body;
@@ -899,13 +904,19 @@ app.post('/api/360dialog/messages', authenticate, async (req: any, res) => {
   try {
     const apiKey = conversation.access_token.trim();
     const payload = {
+      messaging_product: 'whatsapp',
       recipient_type: 'individual',
       to: conversation.customer_phone,
       type: 'text',
       text: { body: content }
     };
 
-    let response = await fetch(`https://waba.360dialog.io/v1/messages`, {
+    const logEntry: any = { time: new Date().toISOString(), payload, attempts: [] };
+    apiLogs.unshift(logEntry);
+    if (apiLogs.length > 20) apiLogs.pop();
+
+    let url = `https://waba.360dialog.io/v1/messages`;
+    let response = await fetch(url, {
       method: 'POST',
       headers: {
         'D360-API-KEY': apiKey,
@@ -913,9 +924,13 @@ app.post('/api/360dialog/messages', authenticate, async (req: any, res) => {
       },
       body: JSON.stringify(payload)
     });
+    
+    let text = await response.text();
+    logEntry.attempts.push({ url, status: response.status, response: text });
 
-    if (response.status === 401 || response.status === 403 || response.status === 404) {
-      response = await fetch(`https://waba-v2.360dialog.io/v1/messages`, {
+    if (!response.ok) {
+      url = `https://waba-v2.360dialog.io/v1/messages`;
+      response = await fetch(url, {
         method: 'POST',
         headers: {
           'D360-API-KEY': apiKey,
@@ -923,10 +938,13 @@ app.post('/api/360dialog/messages', authenticate, async (req: any, res) => {
         },
         body: JSON.stringify(payload)
       });
+      text = await response.text();
+      logEntry.attempts.push({ url, status: response.status, response: text });
     }
 
-    if (response.status === 401 || response.status === 403 || response.status === 404) {
-      response = await fetch(`https://waba-sandbox.360dialog.io/v1/messages`, {
+    if (!response.ok) {
+      url = `https://waba-sandbox.360dialog.io/v1/messages`;
+      response = await fetch(url, {
         method: 'POST',
         headers: {
           'D360-API-KEY': apiKey,
@@ -934,10 +952,11 @@ app.post('/api/360dialog/messages', authenticate, async (req: any, res) => {
         },
         body: JSON.stringify(payload)
       });
+      text = await response.text();
+      logEntry.attempts.push({ url, status: response.status, response: text });
     }
 
     let data;
-    const text = await response.text();
     try {
       data = JSON.parse(text);
     } catch (e) {
