@@ -57,28 +57,38 @@ export function Settings() {
     
     try {
       const token = localStorage.getItem('token');
+      
+      // Se for 360dialog, o usuário pode não ter um phone_number_id da Meta. 
+      // Vamos gerar um dummy se estiver vazio para não quebrar o banco.
+      const finalPhoneId = whatsappPhoneId.trim() || `360-${Date.now()}`;
+      
       // Also register the number in the backend so the webhook can find it
-      await fetch('/api/whatsapp/numbers', {
+      const res = await fetch('/api/whatsapp/numbers', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
-          phone_number_id: whatsappPhoneId,
-          phone_number: whatsappPhoneId, // Using ID as fallback for phone number
+          phone_number_id: finalPhoneId,
+          phone_number: finalPhoneId, // Using ID as fallback for phone number
           access_token: whatsappApiKey,
           waba_id: 'default'
         })
       });
       
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || 'Erro ao salvar no servidor');
+      }
+      
       setIsSaving(false);
       setSaveMessage('Configurações salvas com sucesso!');
       setTimeout(() => setSaveMessage(''), 3000);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to save WhatsApp settings to backend', error);
       setIsSaving(false);
-      setSaveMessage('Erro ao salvar no servidor.');
+      setSaveMessage(error.message || 'Erro ao salvar no servidor.');
     }
   };
 
