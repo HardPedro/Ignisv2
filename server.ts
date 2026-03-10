@@ -537,8 +537,8 @@ app.post('/webhooks/whatsapp', (req, res) => {
             
             if (!conversation) {
               const convId = 'wac-' + Date.now();
-              db.prepare('INSERT INTO whatsapp_conversations (id, tenant_id, whatsapp_number_id, customer_phone, customer_name, last_message_at) VALUES (?, ?, ?, ?, ?, ?)').run(
-                convId, waNumber.tenant_id, waNumber.id, wa_id, customer_name, timestamp
+              db.prepare('INSERT INTO whatsapp_conversations (id, tenant_id, whatsapp_number_id, customer_phone, customer_name, last_message_at, bot_active) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+                convId, waNumber.tenant_id, waNumber.id, wa_id, customer_name, timestamp, 1
               );
               conversation = { id: convId };
             } else {
@@ -628,7 +628,7 @@ app.post('/api/whatsapp/conversations', authenticate, (req: any, res) => {
   const id = 'wac-' + Date.now();
   try {
     db.prepare('INSERT INTO whatsapp_conversations (id, tenant_id, whatsapp_number_id, customer_phone, customer_name, last_message_at, bot_active) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
-      id, req.user.tenant_id, whatsapp_number_id, customer_phone, customer_name || customer_phone, new Date().toISOString(), 0
+      id, req.user.tenant_id, whatsapp_number_id, customer_phone, customer_name || customer_phone, new Date().toISOString(), 1
     );
     res.json({ id, is_new: true });
   } catch (err) {
@@ -653,6 +653,80 @@ app.put('/api/whatsapp/conversations/:id/bot', authenticate, (req: any, res) => 
     res.json({ success: true, bot_active: !!bot_active });
   } catch (err) {
     res.status(500).json({ error: 'Failed to update bot status' });
+  }
+});
+
+// Auto-generate quote from bot
+app.post('/api/whatsapp/conversations/:id/auto-quote', authenticate, (req: any, res) => {
+  const { services = [], parts = [], vehicle_make = 'Desconhecido', vehicle_model = 'Desconhecido' } = req.body;
+  const conversation_id = req.params.id;
+  const tenant_id = req.user.tenant_id;
+
+  try {
+    // Get conversation details
+    const conv = db.prepare('SELECT customer_phone, customer_name FROM whatsapp_conversations WHERE id = ? AND tenant_id = ?').get(conversation_id, tenant_id) as any;
+    if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+
+    // Find or create customer
+    let customer = db.prepare('SELECT id FROM customers WHERE phone = ? AND tenant_id = ?').get(conv.customer_phone, tenant_id) as any;
+    if (!customer) {
+      const custId = 'c-' + Date.now();
+      db.prepare('INSERT INTO customers (id, tenant_id, name, phone) VALUES (?, ?, ?, ?)').run(custId, tenant_id, conv.customer_name || 'Cliente WhatsApp', conv.customer_phone);
+      customer = { id: custId };
+    }
+
+    // Find or create vehicle
+    let vehicle = db.prepare('SELECT id FROM vehicles WHERE customer_id = ? AND tenant_id = ?').get(customer.id, tenant_id) as any;
+    if (!vehicle) {
+      const vehId = 'v-' + Date.now();
+      db.prepare('INSERT INTO vehicles (id, tenant_id, customer_id, make, model) VALUES (?, ?, ?, ?, ?)').run(vehId, tenant_id, customer.id, vehicle_make, vehicle_model);
+      vehicle = { id: vehId };
+    }
+
+    // Create quote
+    const quoteId = 'q-' + Date.now();
+    let totalAmount = 0;
+    const itemsToInsert = [];
+
+    // Process services
+    for (const serviceName of services) {
+      let srv = db.prepare('SELECT id, default_price FROM services WHERE name LIKE ? AND tenant_id = ?').get(`%${serviceName}%`, tenant_id) as any;
+      if (!srv) {
+        const srvId = 's-' + Date.now() + Math.random();
+        const price = 100.0; // Default fallback price
+        db.prepare('INSERT INTO services (id, tenant_id, name, category, default_price) VALUES (?, ?, ?, ?, ?)').run(srvId, tenant_id, serviceName, 'Geral', price);
+        srv = { id: srvId, default_price: price };
+      }
+      itemsToInsert.push({ type: 'service', ref_id: srv.id, qty: 1, unit_price: srv.default_price });
+      totalAmount += srv.default_price;
+    }
+
+    // Process parts
+    for (const partName of parts) {
+      let prt = db.prepare('SELECT id, price FROM parts WHERE name LIKE ? AND tenant_id = ?').get(`%${partName}%`, tenant_id) as any;
+      if (!prt) {
+        const prtId = 'p-' + Date.now() + Math.random();
+        const price = 50.0; // Default fallback price
+        db.prepare('INSERT INTO parts (id, tenant_id, name, unit, cost, price) VALUES (?, ?, ?, ?, ?, ?)').run(prtId, tenant_id, partName, 'Unidade', price * 0.5, price);
+        prt = { id: prtId, price: price };
+      }
+      itemsToInsert.push({ type: 'part', ref_id: prt.id, qty: 1, unit_price: prt.price });
+      totalAmount += prt.price;
+    }
+
+    db.transaction(() => {
+      db.prepare('INSERT INTO quotes (id, tenant_id, customer_id, vehicle_id, total_amount) VALUES (?, ?, ?, ?, ?)').run(quoteId, tenant_id, customer.id, vehicle.id, totalAmount);
+      
+      const insertItem = db.prepare('INSERT INTO quote_items (id, tenant_id, quote_id, type, ref_id, qty, unit_price) VALUES (?, ?, ?, ?, ?, ?, ?)');
+      for (const item of itemsToInsert) {
+        insertItem.run('qi-' + Date.now() + Math.random(), tenant_id, quoteId, item.type, item.ref_id, item.qty, item.unit_price);
+      }
+    })();
+
+    res.json({ success: true, quote_id: quoteId, total_amount: totalAmount });
+  } catch (err) {
+    console.error('Auto-quote error:', err);
+    res.status(500).json({ error: 'Failed to generate auto-quote' });
   }
 });
 
@@ -840,8 +914,8 @@ app.post('/webhooks/360dialog', (req, res) => {
           
           if (!conversation) {
             const convId = 'wac-' + Date.now();
-            db.prepare('INSERT INTO whatsapp_conversations (id, tenant_id, whatsapp_number_id, customer_phone, customer_name, last_message_at) VALUES (?, ?, ?, ?, ?, ?)').run(
-              convId, waNumber.tenant_id, waNumber.id, wa_id, customer_name, timestamp
+            db.prepare('INSERT INTO whatsapp_conversations (id, tenant_id, whatsapp_number_id, customer_phone, customer_name, last_message_at, bot_active) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+              convId, waNumber.tenant_id, waNumber.id, wa_id, customer_name, timestamp, 1
             );
             conversation = { id: convId };
           } else {

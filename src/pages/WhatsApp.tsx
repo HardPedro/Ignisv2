@@ -1,6 +1,35 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MessageSquare, Bot, Send, User, Search, Plus, Phone, CheckCircle, X } from 'lucide-react';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
+
+const generateQuoteFunctionDeclaration: FunctionDeclaration = {
+  name: "generateQuote",
+  parameters: {
+    type: Type.OBJECT,
+    description: "Gera um orçamento automático para o cliente com base nos serviços e peças solicitados.",
+    properties: {
+      services: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "Lista de serviços solicitados (ex: 'Troca de Óleo', 'Alinhamento')",
+      },
+      parts: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description: "Lista de peças solicitadas (ex: 'Filtro de Óleo', 'Pastilha de Freio')",
+      },
+      vehicle_make: {
+        type: Type.STRING,
+        description: "Marca do veículo do cliente (ex: 'Volkswagen', 'Fiat')",
+      },
+      vehicle_model: {
+        type: Type.STRING,
+        description: "Modelo do veículo do cliente (ex: 'Gol', 'Uno')",
+      }
+    },
+    required: ["services"],
+  },
+};
 import { motion, AnimatePresence } from 'motion/react';
 
 import { createPortal } from 'react-dom';
@@ -12,7 +41,13 @@ export function WhatsApp() {
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  const isSendingRef = useRef(false);
   const [isBotActive, setIsBotActive] = useState(false);
+  
+  // Update ref when state changes
+  useEffect(() => {
+    isSendingRef.current = isSending;
+  }, [isSending]);
   
   // New conversation modal
   const [isNewConvModalOpen, setIsNewConvModalOpen] = useState(false);
@@ -94,7 +129,7 @@ export function WhatsApp() {
         if (selectedConv && selectedConv.bot_active === 1 && data.length > 0) {
           const lastMsg = data[data.length - 1];
           // Check if the last message is inbound and we haven't replied yet
-          if (lastMsg.direction === 'inbound' && !isSending) {
+          if (lastMsg.direction === 'inbound' && !isSendingRef.current) {
             // Check if the last message was processed by bot already (simple heuristic: if the very last message is inbound, bot hasn't replied yet)
             handleBotAutoReply(convId, data);
           }
@@ -196,11 +231,11 @@ export function WhatsApp() {
   };
 
   const handleBotAutoReply = async (convId: string, currentMessages: any[]) => {
-    if (isSending) return;
+    if (isSendingRef.current) return;
     setIsSending(true);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY || '' });
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
       
       // Build context
       let prompt = "Você é um assistente virtual de uma oficina mecânica chamada Oficina Pro. Responda de forma educada, curta e prestativa. Aqui está o histórico da conversa:\n\n";
@@ -216,9 +251,39 @@ export function WhatsApp() {
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: prompt,
+        config: {
+          tools: [{ functionDeclarations: [generateQuoteFunctionDeclaration] }],
+          systemInstruction: "Você é um assistente virtual de uma oficina mecânica. Se o cliente pedir um orçamento, use a ferramenta generateQuote para criar um orçamento e informe o valor total estimado retornado pela ferramenta."
+        }
       });
 
-      const replyText = response.text || "Desculpe, não consegui entender. Pode repetir?";
+      let replyText = "";
+      const functionCalls = response.functionCalls;
+      
+      if (functionCalls && functionCalls.length > 0) {
+        const call = functionCalls[0];
+        if (call.name === 'generateQuote') {
+          const args = call.args as any;
+          const token = localStorage.getItem('token');
+          const quoteRes = await fetch(`/api/whatsapp/conversations/${convId}/auto-quote`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(args)
+          });
+          
+          if (quoteRes.ok) {
+            const quoteData = await quoteRes.json();
+            replyText = `Acabei de gerar um orçamento para você! O valor total estimado é de R$ ${quoteData.total_amount.toFixed(2)}. Posso enviar o link ou os detalhes se desejar.`;
+          } else {
+            replyText = "Tentei gerar o orçamento, mas ocorreu um erro no sistema. Um de nossos atendentes falará com você em breve.";
+          }
+        }
+      } else {
+        replyText = response.text || "Desculpe, não consegui entender. Pode repetir?";
+      }
       
       // Send the generated reply
       const token = localStorage.getItem('token');
@@ -271,7 +336,7 @@ export function WhatsApp() {
         
         // Find and select the new conversation
         setTimeout(() => {
-          const conv = conversations.find(c => c.id === data.id) || { id: data.id, customer_phone: newPhone, customer_name: newName, bot_active: 0 };
+          const conv = conversations.find(c => c.id === data.id) || { id: data.id, customer_phone: newPhone, customer_name: newName, bot_active: 1 };
           handleSelectConversation(conv);
         }, 500);
       }
