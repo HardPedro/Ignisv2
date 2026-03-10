@@ -1,7 +1,12 @@
 import Database from 'better-sqlite3';
 import bcrypt from 'bcryptjs';
+import path from 'path';
 
-const db = new Database('app.db', { verbose: console.log });
+// Use environment variable for DB path (crucial for Render Persistent Disk)
+const dbPath = process.env.DB_PATH || 'app.db';
+console.log(`Using database at: ${dbPath}`);
+
+const db = new Database(dbPath, { verbose: console.log });
 
 // Enable foreign keys
 db.pragma('foreign_keys = ON');

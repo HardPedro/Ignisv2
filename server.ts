@@ -721,6 +721,152 @@ app.post('/api/whatsapp/messages', authenticate, async (req: any, res) => {
   }
 });
 
+// --- 360dialog Integration (Test) ---
+
+// Endpoint to register the webhook URL with 360dialog
+app.post('/api/360dialog/set-webhook', authenticate, async (req: any, res) => {
+  const { webhook_url } = req.body;
+
+  if (!webhook_url) {
+    return res.status(400).json({ error: 'webhook_url is required' });
+  }
+
+  // Pegar o primeiro número cadastrado (ou você pode passar o ID do número no body)
+  const waNumber = db.prepare('SELECT access_token FROM whatsapp_numbers WHERE tenant_id = ? LIMIT 1').get(req.user.tenant_id) as any;
+
+  if (!waNumber || !waNumber.access_token) {
+    return res.status(400).json({ error: 'WhatsApp number with access token not found' });
+  }
+
+  try {
+    const response = await fetch('https://waba.360dialog.io/v1/configs/webhook', {
+      method: 'POST',
+      headers: {
+        'D360-API-KEY': waNumber.access_token,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        url: webhook_url
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error('360dialog Webhook Setup Error:', data);
+      return res.status(500).json({ error: 'Failed to set webhook via 360dialog API', details: data });
+    }
+
+    res.json({ success: true, message: 'Webhook configured successfully in 360dialog', data });
+  } catch (err) {
+    console.error('Error setting 360dialog webhook:', err);
+    res.status(500).json({ error: 'Internal server error while setting webhook' });
+  }
+});
+
+// Webhook Event Handler for 360dialog
+app.post('/webhooks/360dialog', (req, res) => {
+  const body = req.body;
+  
+  if (body.contacts && body.messages) {
+    // 360dialog /v1/ webhook format
+    const message = body.messages[0];
+    const contact = body.contacts[0];
+    
+    const wa_id = message.from;
+    const msg_body = message.text ? message.text.body : '';
+    const msg_id = message.id;
+    const timestamp = new Date(parseInt(message.timestamp) * 1000).toISOString();
+    const customer_name = contact ? contact.profile.name : 'Desconhecido';
+    
+    // Para testes, vamos pegar o primeiro número cadastrado no banco
+    const waNumber = db.prepare('SELECT id, tenant_id FROM whatsapp_numbers LIMIT 1').get() as any;
+
+    if (waNumber) {
+      try {
+        db.transaction(() => {
+          let conversation = db.prepare('SELECT id FROM whatsapp_conversations WHERE whatsapp_number_id = ? AND customer_phone = ?').get(waNumber.id, wa_id) as any;
+          
+          if (!conversation) {
+            const convId = 'wac-' + Date.now();
+            db.prepare('INSERT INTO whatsapp_conversations (id, tenant_id, whatsapp_number_id, customer_phone, customer_name, last_message_at) VALUES (?, ?, ?, ?, ?, ?)').run(
+              convId, waNumber.tenant_id, waNumber.id, wa_id, customer_name, timestamp
+            );
+            conversation = { id: convId };
+          } else {
+            db.prepare('UPDATE whatsapp_conversations SET last_message_at = ?, customer_name = ? WHERE id = ?').run(timestamp, customer_name, conversation.id);
+          }
+
+          db.prepare('INSERT OR IGNORE INTO whatsapp_messages (id, tenant_id, conversation_id, wa_message_id, direction, type, content, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+            'wam-' + Date.now() + Math.random(), waNumber.tenant_id, conversation.id, msg_id, 'inbound', message.type, msg_body, 'received', timestamp
+          );
+        })();
+      } catch (err) {
+        console.error('Error processing 360dialog webhook:', err);
+      }
+    }
+  }
+  res.sendStatus(200);
+});
+
+// Send a message via 360dialog API
+app.post('/api/360dialog/messages', authenticate, async (req: any, res) => {
+  const { conversation_id, content } = req.body;
+
+  if (!conversation_id || !content) {
+    return res.status(400).json({ error: 'conversation_id and content are required' });
+  }
+
+  const conversation = db.prepare(`
+    SELECT c.customer_phone, n.phone_number_id, n.access_token 
+    FROM whatsapp_conversations c
+    JOIN whatsapp_numbers n ON c.whatsapp_number_id = n.id
+    WHERE c.id = ? AND c.tenant_id = ?
+  `).get(conversation_id, req.user.tenant_id) as any;
+
+  if (!conversation) {
+    return res.status(404).json({ error: 'Conversation not found' });
+  }
+
+  try {
+    const response = await fetch(`https://waba.360dialog.io/v1/messages`, {
+      method: 'POST',
+      headers: {
+        'D360-API-KEY': conversation.access_token,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        recipient_type: 'individual',
+        to: conversation.customer_phone,
+        type: 'text',
+        text: { body: content }
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      console.error('360dialog API Error:', data);
+      return res.status(500).json({ error: 'Failed to send message via 360dialog API', details: data });
+    }
+
+    const wa_message_id = data.messages?.[0]?.id;
+    const timestamp = new Date().toISOString();
+
+    db.transaction(() => {
+      db.prepare('INSERT INTO whatsapp_messages (id, tenant_id, conversation_id, wa_message_id, direction, type, content, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+        'wam-' + Date.now() + Math.random(), req.user.tenant_id, conversation_id, wa_message_id, 'outbound', 'text', content, 'sent', timestamp
+      );
+      db.prepare('UPDATE whatsapp_conversations SET last_message_at = ? WHERE id = ?').run(timestamp, conversation_id);
+    })();
+
+    res.json({ success: true, message_id: wa_message_id });
+  } catch (err) {
+    console.error('Error sending 360dialog message:', err);
+    res.status(500).json({ error: 'Internal server error while sending message' });
+  }
+});
+
 // --- Vite Integration ---
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {

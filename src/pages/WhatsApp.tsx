@@ -130,7 +130,8 @@ export function WhatsApp() {
 
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch('/api/whatsapp/messages', {
+      // Usando a rota da 360dialog para enviar a mensagem
+      const res = await fetch('/api/360dialog/messages', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -220,7 +221,7 @@ export function WhatsApp() {
       
       // Send the generated reply
       const token = localStorage.getItem('token');
-      await fetch('/api/whatsapp/messages', {
+      await fetch('/api/360dialog/messages', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

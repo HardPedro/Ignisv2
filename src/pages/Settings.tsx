@@ -82,6 +82,33 @@ export function Settings() {
     }
   };
 
+  const handleRegister360Webhook = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      // Use the current origin dynamically
+      const webhookUrl = `${window.location.origin}/webhooks/360dialog`;
+      
+      const res = await fetch('/api/360dialog/set-webhook', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ webhook_url: webhookUrl })
+      });
+      
+      const data = await res.json();
+      if (res.ok) {
+        alert('Webhook configurado com sucesso na 360dialog!\nURL: ' + webhookUrl);
+      } else {
+        alert('Erro ao configurar webhook: ' + (data.error || 'Erro desconhecido'));
+      }
+    } catch (error) {
+      console.error('Failed to register webhook', error);
+      alert('Erro de conexão ao tentar configurar o webhook.');
+    }
+  };
+
   const loadAccounts = async () => {
     setIsLoadingAccounts(true);
     try {
@@ -305,7 +332,7 @@ export function Settings() {
                     />
                   </div>
 
-                  <div className="pt-4 flex items-center">
+                  <div className="pt-4 flex items-center space-x-4">
                     <button 
                       type="submit"
                       disabled={isSaving}
@@ -314,8 +341,16 @@ export function Settings() {
                       {isSaving ? 'Salvando...' : 'Salvar Credenciais'}
                     </button>
                     
+                    <button 
+                      type="button"
+                      onClick={handleRegister360Webhook}
+                      className="inline-flex items-center px-4 py-2 border border-gray-600 text-sm font-bold rounded-xl shadow-sm text-white bg-gray-800 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-gray-500 transition-all duration-200"
+                    >
+                      Configurar Webhook 360dialog
+                    </button>
+                    
                     {saveMessage && (
-                      <span className="ml-4 text-sm text-green-400 flex items-center">
+                      <span className="text-sm text-green-400 flex items-center">
                         {saveMessage}
                       </span>
                     )}
