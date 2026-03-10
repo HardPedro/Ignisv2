@@ -753,6 +753,17 @@ app.post('/api/whatsapp/messages', authenticate, async (req: any, res) => {
     return res.status(400).json({ error: 'WhatsApp access token not configured for this number' });
   }
 
+  const timestamp = new Date().toISOString();
+  const messageId = 'wam-' + Date.now() + Math.random();
+
+  // Save message to DB immediately
+  db.transaction(() => {
+    db.prepare('INSERT INTO whatsapp_messages (id, tenant_id, conversation_id, wa_message_id, direction, type, content, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      messageId, req.user.tenant_id, conversation_id, null, 'outbound', 'text', content, 'pending', timestamp
+    );
+    db.prepare('UPDATE whatsapp_conversations SET last_message_at = ? WHERE id = ?').run(timestamp, conversation_id);
+  })();
+
   try {
     // Call WhatsApp API
     const response = await fetch(`https://graph.facebook.com/v17.0/${conversation.phone_number_id}/messages`, {
@@ -774,23 +785,20 @@ app.post('/api/whatsapp/messages', authenticate, async (req: any, res) => {
 
     if (!response.ok) {
       console.error('WhatsApp API Error:', data);
+      db.prepare('UPDATE whatsapp_messages SET status = ? WHERE id = ?').run('failed', messageId);
       return res.status(500).json({ error: 'Failed to send message via WhatsApp API', details: data });
     }
 
     const wa_message_id = data.messages?.[0]?.id;
-    const timestamp = new Date().toISOString();
 
-    // Save message to DB
     db.transaction(() => {
-      db.prepare('INSERT INTO whatsapp_messages (id, tenant_id, conversation_id, wa_message_id, direction, type, content, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
-        'wam-' + Date.now() + Math.random(), req.user.tenant_id, conversation_id, wa_message_id, 'outbound', 'text', content, 'sent', timestamp
-      );
-      db.prepare('UPDATE whatsapp_conversations SET last_message_at = ? WHERE id = ?').run(timestamp, conversation_id);
+      db.prepare('UPDATE whatsapp_messages SET status = ?, wa_message_id = ? WHERE id = ?').run('sent', wa_message_id, messageId);
     })();
 
     res.json({ success: true, message_id: wa_message_id });
   } catch (err) {
     console.error('Error sending WhatsApp message:', err);
+    db.prepare('UPDATE whatsapp_messages SET status = ? WHERE id = ?').run('failed', messageId);
     res.status(500).json({ error: 'Internal server error while sending message' });
   }
 });
@@ -975,6 +983,17 @@ app.post('/api/360dialog/messages', authenticate, async (req: any, res) => {
     return res.status(404).json({ error: 'Conversation not found' });
   }
 
+  const timestamp = new Date().toISOString();
+  const messageId = 'wam-' + Date.now() + Math.random();
+
+  // Save message to DB immediately so it shows up in UI even if API fails
+  db.transaction(() => {
+    db.prepare('INSERT INTO whatsapp_messages (id, tenant_id, conversation_id, wa_message_id, direction, type, content, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+      messageId, req.user.tenant_id, conversation_id, null, 'outbound', 'text', content, 'pending', timestamp
+    );
+    db.prepare('UPDATE whatsapp_conversations SET last_message_at = ? WHERE id = ?').run(timestamp, conversation_id);
+  })();
+
   try {
     const apiKey = conversation.access_token.trim();
     const payload = {
@@ -1039,6 +1058,7 @@ app.post('/api/360dialog/messages', authenticate, async (req: any, res) => {
 
     if (!response.ok) {
       console.error('360dialog API Error:', response.status, data);
+      db.prepare('UPDATE whatsapp_messages SET status = ? WHERE id = ?').run('failed', messageId);
       return res.status(500).json({ 
         error: 'Failed to send message via 360dialog API', 
         details: { status: response.status, ...data } 
@@ -1046,18 +1066,15 @@ app.post('/api/360dialog/messages', authenticate, async (req: any, res) => {
     }
 
     const wa_message_id = data.messages?.[0]?.id;
-    const timestamp = new Date().toISOString();
 
     db.transaction(() => {
-      db.prepare('INSERT INTO whatsapp_messages (id, tenant_id, conversation_id, wa_message_id, direction, type, content, status, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
-        'wam-' + Date.now() + Math.random(), req.user.tenant_id, conversation_id, wa_message_id, 'outbound', 'text', content, 'sent', timestamp
-      );
-      db.prepare('UPDATE whatsapp_conversations SET last_message_at = ? WHERE id = ?').run(timestamp, conversation_id);
+      db.prepare('UPDATE whatsapp_messages SET status = ?, wa_message_id = ? WHERE id = ?').run('sent', wa_message_id, messageId);
     })();
 
     res.json({ success: true, message_id: wa_message_id });
   } catch (err) {
     console.error('Error sending 360dialog message:', err);
+    db.prepare('UPDATE whatsapp_messages SET status = ? WHERE id = ?').run('failed', messageId);
     res.status(500).json({ error: 'Internal server error while sending message' });
   }
 });

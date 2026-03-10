@@ -148,10 +148,11 @@ export function WhatsApp() {
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!newMessage.trim() || !selectedConv) return;
+    if (!newMessage.trim() || !selectedConv || isSendingRef.current) return;
 
     const content = newMessage;
     setNewMessage('');
+    isSendingRef.current = true;
     setIsSending(true);
 
     // Optimistic update
@@ -184,8 +185,9 @@ export function WhatsApp() {
       } else {
         const errorData = await res.json();
         console.error('Failed to send message:', errorData);
-        // Remove optimistic message on failure
+        // Remove optimistic message on failure, fetch real message from DB
         setMessages(prev => prev.filter(m => m.id !== tempMsg.id));
+        fetchMessages(selectedConv.id, false);
         
         if (errorData.details?.error?.message?.includes('expired')) {
           alert('Erro: O token do WhatsApp expirou. Por favor, gere um novo token no painel da Meta e atualize nas Configurações.');
@@ -197,8 +199,10 @@ export function WhatsApp() {
     } catch (err) {
       console.error('Error sending message', err);
       setMessages(prev => prev.filter(m => m.id !== tempMsg.id));
+      fetchMessages(selectedConv.id, false);
       alert('Erro de conexão ao enviar mensagem.');
     } finally {
+      isSendingRef.current = false;
       setIsSending(false);
     }
   };
@@ -230,8 +234,86 @@ export function WhatsApp() {
     }
   };
 
+  const handleManualAutoQuote = async () => {
+    if (!selectedConv || isSendingRef.current) return;
+    isSendingRef.current = true;
+    setIsSending(true);
+    
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+      
+      let prompt = "Analise a conversa abaixo e extraia os serviços, peças e o modelo/marca do veículo mencionados pelo cliente para gerar um orçamento.\n\nConversa:\n";
+      
+      const recentMsgs = messages.slice(-20);
+      recentMsgs.forEach(msg => {
+        prompt += `${msg.direction === 'inbound' ? 'Cliente' : 'Oficina'}: ${msg.content}\n`;
+      });
+      
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: prompt,
+        config: {
+          tools: [{ functionDeclarations: [generateQuoteFunctionDeclaration] }],
+          systemInstruction: "Você é um assistente de oficina. Use a ferramenta generateQuote para criar um orçamento baseado na conversa. Se não houver serviços claros, infira os mais prováveis (ex: Revisão Geral)."
+        }
+      });
+
+      let replyText = "";
+      const functionCalls = response.functionCalls;
+      
+      if (functionCalls && functionCalls.length > 0) {
+        const call = functionCalls[0];
+        if (call.name === 'generateQuote') {
+          const args = call.args as any;
+          const token = localStorage.getItem('token');
+          const quoteRes = await fetch(`/api/whatsapp/conversations/${selectedConv.id}/auto-quote`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(args)
+          });
+          
+          if (quoteRes.ok) {
+            const quoteData = await quoteRes.json();
+            replyText = `Acabei de gerar um pré-orçamento para você! O valor total estimado é de R$ ${quoteData.total_amount.toFixed(2)}. Posso enviar o link ou os detalhes se desejar.`;
+          } else {
+            replyText = "Tentei gerar o orçamento, mas ocorreu um erro no sistema.";
+          }
+        }
+      } else {
+        replyText = "Não consegui identificar os serviços na conversa para gerar o orçamento.";
+      }
+      
+      if (replyText) {
+        const token = localStorage.getItem('token');
+        await fetch('/api/360dialog/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            conversation_id: selectedConv.id,
+            content: replyText
+          }),
+        });
+        fetchMessages(selectedConv.id, false);
+      }
+      
+    } catch (error) {
+      console.error('Manual quote failed:', error);
+      alert('Erro ao gerar pré-orçamento.');
+    } finally {
+      isSendingRef.current = false;
+      setIsSending(false);
+    }
+  };
+
   const handleBotAutoReply = async (convId: string, currentMessages: any[]) => {
     if (isSendingRef.current) return;
+    isSendingRef.current = true;
     setIsSending(true);
     
     try {
@@ -304,6 +386,7 @@ export function WhatsApp() {
     } catch (error) {
       console.error('Bot reply failed:', error);
     } finally {
+      isSendingRef.current = false;
       setIsSending(false);
     }
   };
@@ -446,6 +529,13 @@ export function WhatsApp() {
                 
                 <div className="flex items-center space-x-2">
                   <button
+                    onClick={handleManualAutoQuote}
+                    disabled={isSending}
+                    className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-lg shadow-sm bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    Gerar Pré-Orçamento
+                  </button>
+                  <button
                     onClick={handleToggleBot}
                     className={`inline-flex items-center px-3 py-1.5 border text-sm font-medium rounded-lg shadow-sm transition-colors ${
                       isBotActive 
@@ -477,7 +567,11 @@ export function WhatsApp() {
                               {formatTime(msg.timestamp)}
                             </span>
                             {isOutbound && (
-                              <CheckCircle className={`h-3 w-3 ${msg.status === 'read' ? 'text-blue-500' : 'text-gray-400'}`} />
+                              msg.status === 'failed' ? (
+                                <X className="h-3 w-3 text-red-500" title="Falha ao enviar" />
+                              ) : (
+                                <CheckCircle className={`h-3 w-3 ${msg.status === 'read' ? 'text-blue-500' : 'text-gray-400'}`} />
+                              )
                             )}
                           </div>
                         </div>
