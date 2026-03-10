@@ -739,28 +739,60 @@ app.post('/api/360dialog/set-webhook', authenticate, async (req: any, res) => {
   }
 
   try {
-    const response = await fetch('https://waba.360dialog.io/v1/configs/webhook', {
+    const apiKey = waNumber.access_token.trim();
+    let response = await fetch('https://waba.360dialog.io/v1/configs/webhook', {
       method: 'POST',
       headers: {
-        'D360-API-KEY': waNumber.access_token,
+        'D360-API-KEY': apiKey,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        url: webhook_url
-      })
+      body: JSON.stringify({ url: webhook_url })
     });
 
-    const data = await response.json();
+    if (response.status === 401 || response.status === 403 || response.status === 404) {
+      // Try waba-v2
+      response = await fetch('https://waba-v2.360dialog.io/v1/configs/webhook', {
+        method: 'POST',
+        headers: {
+          'D360-API-KEY': apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url: webhook_url })
+      });
+    }
+
+    if (response.status === 401 || response.status === 403 || response.status === 404) {
+      // Try sandbox
+      response = await fetch('https://waba-sandbox.360dialog.io/v1/configs/webhook', {
+        method: 'POST',
+        headers: {
+          'D360-API-KEY': apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url: webhook_url })
+      });
+    }
+
+    let data;
+    const text = await response.text();
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      data = { raw: text };
+    }
 
     if (!response.ok) {
-      console.error('360dialog Webhook Setup Error:', data);
-      return res.status(500).json({ error: 'Failed to set webhook via 360dialog API', details: data });
+      console.error('360dialog Webhook Setup Error:', response.status, data);
+      return res.status(500).json({ 
+        error: 'Failed to set webhook via 360dialog API', 
+        details: { status: response.status, ...data } 
+      });
     }
 
     res.json({ success: true, message: 'Webhook configured successfully in 360dialog', data });
-  } catch (err) {
+  } catch (err: any) {
     console.error('Error setting 360dialog webhook:', err);
-    res.status(500).json({ error: 'Internal server error while setting webhook' });
+    res.status(500).json({ error: 'Internal server error while setting webhook', details: err.message });
   }
 });
 
@@ -829,25 +861,59 @@ app.post('/api/360dialog/messages', authenticate, async (req: any, res) => {
   }
 
   try {
-    const response = await fetch(`https://waba.360dialog.io/v1/messages`, {
+    const apiKey = conversation.access_token.trim();
+    const payload = {
+      recipient_type: 'individual',
+      to: conversation.customer_phone,
+      type: 'text',
+      text: { body: content }
+    };
+
+    let response = await fetch(`https://waba.360dialog.io/v1/messages`, {
       method: 'POST',
       headers: {
-        'D360-API-KEY': conversation.access_token,
+        'D360-API-KEY': apiKey,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        recipient_type: 'individual',
-        to: conversation.customer_phone,
-        type: 'text',
-        text: { body: content }
-      })
+      body: JSON.stringify(payload)
     });
 
-    const data = await response.json();
+    if (response.status === 401 || response.status === 403 || response.status === 404) {
+      response = await fetch(`https://waba-v2.360dialog.io/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'D360-API-KEY': apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload)
+      });
+    }
+
+    if (response.status === 401 || response.status === 403 || response.status === 404) {
+      response = await fetch(`https://waba-sandbox.360dialog.io/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'D360-API-KEY': apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload)
+      });
+    }
+
+    let data;
+    const text = await response.text();
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      data = { raw: text };
+    }
 
     if (!response.ok) {
-      console.error('360dialog API Error:', data);
-      return res.status(500).json({ error: 'Failed to send message via 360dialog API', details: data });
+      console.error('360dialog API Error:', response.status, data);
+      return res.status(500).json({ 
+        error: 'Failed to send message via 360dialog API', 
+        details: { status: response.status, ...data } 
+      });
     }
 
     const wa_message_id = data.messages?.[0]?.id;

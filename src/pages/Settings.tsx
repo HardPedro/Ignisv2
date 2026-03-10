@@ -111,7 +111,8 @@ export function Settings() {
       if (res.ok) {
         alert('Webhook configurado com sucesso na 360dialog!\nURL: ' + webhookUrl);
       } else {
-        alert('Erro ao configurar webhook: ' + (data.error || 'Erro desconhecido'));
+        const details = data.details ? JSON.stringify(data.details) : '';
+        alert('Erro ao configurar webhook: ' + (data.error || 'Erro desconhecido') + '\n' + details);
       }
     } catch (error) {
       console.error('Failed to register webhook', error);
