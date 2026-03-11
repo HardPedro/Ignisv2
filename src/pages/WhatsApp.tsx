@@ -5,25 +5,25 @@ import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
 const generateQuoteFunctionDeclaration: FunctionDeclaration = {
   name: "generateQuote",
   parameters: {
-    type: Type.OBJECT,
+    type: "OBJECT" as any,
     description: "Gera um orçamento automático para o cliente com base nos serviços e peças solicitados.",
     properties: {
       services: {
-        type: Type.ARRAY,
-        items: { type: Type.STRING },
+        type: "ARRAY" as any,
+        items: { type: "STRING" as any },
         description: "Lista de serviços solicitados (ex: 'Troca de Óleo', 'Alinhamento')",
       },
       parts: {
-        type: Type.ARRAY,
-        items: { type: Type.STRING },
+        type: "ARRAY" as any,
+        items: { type: "STRING" as any },
         description: "Lista de peças solicitadas (ex: 'Filtro de Óleo', 'Pastilha de Freio')",
       },
       vehicle_make: {
-        type: Type.STRING,
+        type: "STRING" as any,
         description: "Marca do veículo do cliente (ex: 'Volkswagen', 'Fiat')",
       },
       vehicle_model: {
-        type: Type.STRING,
+        type: "STRING" as any,
         description: "Modelo do veículo do cliente (ex: 'Gol', 'Uno')",
       }
     },
@@ -43,6 +43,8 @@ export function WhatsApp() {
   const [isSending, setIsSending] = useState(false);
   const isSendingRef = useRef(false);
   const [isBotActive, setIsBotActive] = useState(false);
+  const [catalog, setCatalog] = useState<{ services: any[], parts: any[] }>({ services: [], parts: [] });
+  const lastMessageTimesRef = useRef<Record<string, string>>({});
   
   // Update ref when state changes
   useEffect(() => {
@@ -61,6 +63,7 @@ export function WhatsApp() {
   useEffect(() => {
     fetchConversations();
     fetchWhatsappNumbers();
+    fetchCatalog();
     
     // Poll for new messages every 3 seconds
     const interval = setInterval(() => {
@@ -97,6 +100,21 @@ export function WhatsApp() {
     }
   };
 
+  const fetchCatalog = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/catalog', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCatalog(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch catalog', err);
+    }
+  };
+
   const fetchConversations = async (showLoading = true) => {
     if (showLoading) setIsLoading(true);
     try {
@@ -107,6 +125,21 @@ export function WhatsApp() {
       if (res.ok) {
         const data = await res.json();
         setConversations(data);
+
+        // Proactive bot check for all conversations
+        data.forEach((conv: any) => {
+          const lastTime = lastMessageTimesRef.current[conv.id];
+          if (conv.bot_active === 1 && conv.last_message_at && conv.last_message_at !== lastTime) {
+            // Update the last message time for this conversation
+            lastMessageTimesRef.current[conv.id] = conv.last_message_at;
+            
+            // If it's not the selected conversation, we need to check if the last message was inbound
+            // If it IS the selected one, fetchMessages (called in the interval) will handle it
+            if (!selectedConv || conv.id !== selectedConv.id) {
+              checkAndReplyToConv(conv.id);
+            }
+          }
+        });
       }
     } catch (err) {
       console.error('Failed to fetch conversations', err);
@@ -114,6 +147,29 @@ export function WhatsApp() {
       if (showLoading) setIsLoading(false);
     }
   };
+
+  const checkAndReplyToConv = async (convId: string) => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`/api/whatsapp/conversations/${convId}/messages`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.length > 0) {
+          const lastMsg = data[data.length - 1];
+          if (lastMsg.direction === 'inbound' && lastProcessedMsgIdRef.current !== lastMsg.id) {
+            lastProcessedMsgIdRef.current = lastMsg.id;
+            handleBotAutoReply(convId, data);
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`Failed to check and reply to conv ${convId}`, err);
+    }
+  };
+
+  const lastProcessedMsgIdRef = useRef<string | null>(null);
 
   const fetchMessages = async (convId: string, showLoading = true) => {
     try {
@@ -129,8 +185,8 @@ export function WhatsApp() {
         if (selectedConv && selectedConv.bot_active === 1 && data.length > 0) {
           const lastMsg = data[data.length - 1];
           // Check if the last message is inbound and we haven't replied yet
-          if (lastMsg.direction === 'inbound' && !isSendingRef.current) {
-            // Check if the last message was processed by bot already (simple heuristic: if the very last message is inbound, bot hasn't replied yet)
+          if (lastMsg.direction === 'inbound' && !isSendingRef.current && lastProcessedMsgIdRef.current !== lastMsg.id) {
+            lastProcessedMsgIdRef.current = lastMsg.id;
             handleBotAutoReply(convId, data);
           }
         }
@@ -240,7 +296,11 @@ export function WhatsApp() {
     setIsSending(true);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error('GEMINI_API_KEY não configurada no ambiente.');
+      }
+      const ai = new GoogleGenAI({ apiKey });
       
       let prompt = "Analise a conversa abaixo e extraia os serviços, peças e o modelo/marca do veículo mencionados pelo cliente para gerar um orçamento.\n\nConversa:\n";
       
@@ -302,9 +362,9 @@ export function WhatsApp() {
         fetchMessages(selectedConv.id, false);
       }
       
-    } catch (error) {
+    } catch (error: any) {
       console.error('Manual quote failed:', error);
-      alert('Erro ao gerar pré-orçamento.');
+      alert(`Erro ao gerar pré-orçamento: ${error?.message || error}`);
     } finally {
       isSendingRef.current = false;
       setIsSending(false);
@@ -317,10 +377,30 @@ export function WhatsApp() {
     setIsSending(true);
     
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error('GEMINI_API_KEY não configurada no ambiente.');
+      }
+      const ai = new GoogleGenAI({ apiKey });
       
       // Build context
-      let prompt = "Você é um assistente virtual de uma oficina mecânica chamada Oficina Pro. Responda de forma educada, curta e prestativa. Aqui está o histórico da conversa:\n\n";
+      let prompt = `Você é um assistente virtual de uma oficina mecânica chamada Oficina Pro. 
+Responda de forma educada, prestativa e proativa. 
+Seu objetivo é ajudar o cliente, tirar dúvidas e, se possível, encaminhar para um orçamento.
+
+Informações da Oficina:
+- Nome: Oficina Pro
+- Serviços Disponíveis: ${catalog.services.map(s => s.name).join(', ')}
+- Peças em Estoque: ${catalog.parts.map(p => p.name).join(', ')}
+
+Diretrizes:
+1. Seja amigável e use emojis ocasionalmente para parecer humano.
+2. Se o cliente perguntar sobre um serviço que temos, confirme e ofereça um orçamento.
+3. Se o cliente pedir um orçamento, use a ferramenta generateQuote.
+4. Mantenha as respostas concisas, mas completas.
+
+Histórico da conversa:
+`;
       
       // Take last 10 messages for context
       const recentMsgs = currentMessages.slice(-10);
@@ -335,7 +415,7 @@ export function WhatsApp() {
         contents: prompt,
         config: {
           tools: [{ functionDeclarations: [generateQuoteFunctionDeclaration] }],
-          systemInstruction: "Você é um assistente virtual de uma oficina mecânica. Se o cliente pedir um orçamento, use a ferramenta generateQuote para criar um orçamento e informe o valor total estimado retornado pela ferramenta."
+          systemInstruction: "Você é o assistente virtual da Oficina Pro. Use o contexto da oficina e da conversa para responder de forma proativa. Se o cliente demonstrar interesse em um serviço ou peça, tente converter em um orçamento usando a ferramenta generateQuote."
         }
       });
 
@@ -383,8 +463,9 @@ export function WhatsApp() {
       
       fetchMessages(convId, false);
       fetchConversations(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Bot reply failed:', error);
+      alert(`Erro no bot: ${error?.message || error}`);
     } finally {
       isSendingRef.current = false;
       setIsSending(false);

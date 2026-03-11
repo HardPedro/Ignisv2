@@ -658,9 +658,12 @@ app.put('/api/whatsapp/conversations/:id/bot', authenticate, (req: any, res) => 
 
 // Auto-generate quote from bot
 app.post('/api/whatsapp/conversations/:id/auto-quote', authenticate, (req: any, res) => {
-  const { services = [], parts = [], vehicle_make = 'Desconhecido', vehicle_model = 'Desconhecido' } = req.body;
+  let { services = [], parts = [], vehicle_make = 'Desconhecido', vehicle_model = 'Desconhecido' } = req.body;
   const conversation_id = req.params.id;
   const tenant_id = req.user.tenant_id;
+
+  if (!Array.isArray(services)) services = [services].filter(Boolean);
+  if (!Array.isArray(parts)) parts = [parts].filter(Boolean);
 
   try {
     // Get conversation details
