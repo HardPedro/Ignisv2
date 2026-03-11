@@ -115,6 +115,25 @@ export function WhatsApp() {
     }
   };
 
+  const getGeminiApiKey = async () => {
+    let key = process.env.GEMINI_API_KEY;
+    if (key) return key;
+    
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/config', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.geminiApiKey;
+      }
+    } catch (err) {
+      console.error('Failed to fetch config', err);
+    }
+    return null;
+  };
+
   const fetchConversations = async (showLoading = true) => {
     if (showLoading) setIsLoading(true);
     try {
@@ -296,7 +315,7 @@ export function WhatsApp() {
     setIsSending(true);
     
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
+      const apiKey = await getGeminiApiKey();
       if (!apiKey) {
         throw new Error('GEMINI_API_KEY não configurada no ambiente.');
       }
@@ -377,7 +396,7 @@ export function WhatsApp() {
     setIsSending(true);
     
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
+      const apiKey = await getGeminiApiKey();
       if (!apiKey) {
         throw new Error('GEMINI_API_KEY não configurada no ambiente.');
       }

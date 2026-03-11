@@ -100,6 +100,11 @@ app.get('/api/auth/me', authenticate, (req: any, res) => {
   res.json({ user });
 });
 
+// Config
+app.get('/api/config', authenticate, (req: any, res) => {
+  res.json({ geminiApiKey: process.env.GEMINI_API_KEY || '' });
+});
+
 // --- Admin Routes ---
 app.get('/api/admin/accounts', authenticate, (req: any, res) => {
   if (req.user.role !== 'SuperAdmin') {

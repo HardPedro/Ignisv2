@@ -16,6 +16,25 @@ export function Leads() {
   const [isSending, setIsSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const getGeminiApiKey = async () => {
+    let key = process.env.GEMINI_API_KEY;
+    if (key) return key;
+    
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/config', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.geminiApiKey;
+      }
+    } catch (err) {
+      console.error('Failed to fetch config', err);
+    }
+    return null;
+  };
+
   useEffect(() => {
     fetchLeads();
   }, []);
@@ -143,7 +162,11 @@ export function Leads() {
       const { services, parts } = await catalogRes.json();
       
       // 2. Call Gemini API
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const apiKey = await getGeminiApiKey();
+      if (!apiKey) {
+        throw new Error('GEMINI_API_KEY não configurada no ambiente.');
+      }
+      const ai = new GoogleGenAI({ apiKey });
       
       const prompt = `
         Você é um assistente técnico de oficina mecânica.
